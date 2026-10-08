@@ -66,7 +66,7 @@ CONFIG_VELHO = os.path.join(os.environ.get("APPDATA", "."), "GravadorJogo", "con
 PADRAO = {"pasta": os.path.join(os.path.expanduser("~"), "Videos", "Argos"),
           "fps": 60, "qualidade": "Alta", "previa": True,
           "monitor": 0, "altura": None, "familia": None, "codec": "h264", "formato": "mp4",
-          "codificadores": None,
+          "codificadores": None, "captura": {"tipo": "tela"},
           "mic": None, "vol_mic": 100, "mudo_mic": True,
           "faixas": [{"fonte": None, "vol": 100, "mudo": True, "nome": None},
                      {"fonte": None, "vol": 100, "mudo": True, "nome": None}]}
@@ -408,8 +408,8 @@ class Configuracoes(ctk.CTkToplevel):
         self._menu(self._linha("Monitor"), list(mons),
                    next(k for k, v in mons.items() if v == c["monitor"]),
                    lambda v: self._mudou(monitor=mons[v]))
-        _, w, h = a.monitor_atual()
-        alts = {f"Do monitor  ·  {w}x{h}": None}
+        w, h = a.tamanho_captura()
+        alts = {(f"Da janela  ·  {w}x{h}" if a.cap.janela else f"Do monitor  ·  {w}x{h}"): None}
         alts.update({f"{x}p  ·  {round(w * x / h) // 2 * 2}x{x}": x for x in ALTURAS if x < h})
         atual_alt = c.get("altura") if c.get("altura") in alts.values() else None
         self._menu(self._linha("Resolução"), list(alts),
@@ -541,6 +541,21 @@ class App:
         # ---------------- previa (escala pra caber, sempre 16:9)
         self.moldura = ctk.CTkFrame(self.corpo, fg_color="#000000", corner_radius=RAIO_CARTAO)
         self.moldura.grid(row=0, column=0, sticky="nsew")
+
+        # ---------------- o que gravar: tela inteira ou UMA janela (embaixo da previa)
+        self.l_captura = ctk.CTkFrame(self.corpo, fg_color="transparent")
+        self.l_captura.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        rotulo(self.l_captura, "Capturar").pack(side="left", padx=(2, 10))
+        self.capturas = {}
+        self.menu_captura = ctk.CTkOptionMenu(
+            self.l_captura, values=["…"], width=520, height=ALTURA_CONTROLE - 4,
+            corner_radius=RAIO_CONTROLE, font=F_TEXTO, dropdown_font=F_TEXTO, fg_color=CAMPO,
+            button_color=CAMPO, button_hover_color=CAMPO_2, text_color=TEXTO,
+            dropdown_fg_color=CARTAO, dropdown_hover_color=CAMPO_2, dropdown_text_color=TEXTO,
+            dynamic_resizing=False, command=self._captura_escolhida)
+        self.menu_captura.pack(side="left")
+        self.l_dica_captura = ctk.CTkLabel(self.l_captura, text="", font=F_ROTULO, text_color=TEXTO_3)
+        self.l_dica_captura.pack(side="left", padx=(12, 0))
         self.tela = tk.Canvas(self.moldura, width=576, height=324, bg="#000000",
                               highlightthickness=0, bd=0)
         self.tela.pack(fill="both", expand=True, padx=RESPIRO // 2, pady=RESPIRO // 2)
@@ -560,7 +575,7 @@ class App:
         # ---------------- cartao AUDIO
         audio = self._cartao(self.corpo, "Áudio")
         self.c_audio = audio.master
-        self.c_audio.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        self.c_audio.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         _, entradas, _, p_mic = motor.listar_audio()
         self.f_faixas = []
         programas = self._listar_programas()
@@ -578,7 +593,7 @@ class App:
         # ---------------- cartao GRAVACAO
         ctrl = self._cartao(self.corpo, "Gravação", largura=270)
         self.c_ctrl = ctrl.master
-        self.c_ctrl.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(12, 0))
+        self.c_ctrl.grid(row=0, column=1, rowspan=3, sticky="ns", padx=(12, 0))
         # botao principal do desenho: preenchido no acento, letra ESCURA por cima
         # (texto claro sobre o ciano daria 1,38:1)
         self.b_gravar = ctk.CTkButton(ctrl, text="●  Gravar", command=self.alternar, height=44,
@@ -628,6 +643,7 @@ class App:
         self.taxas = motor.taxas_dos_monitores()
         self.cap = motor.Captura(self.c["monitor"], ao_quadro=self._novo_quadro)
         self.janela_config = None
+        self._restaurar_captura()
         self._detectar()
         self.previa_mudou(salvar=False)
         self.atalho = Atalho(self.eventos)
@@ -715,8 +731,91 @@ class App:
     def opcoes_fps(self):
         return [30, 60] + [f for f in (120, 144, 165, 240) if f <= self.taxa_monitor() + 1]
 
-    def mostrar_resumo(self):
+    def tamanho_captura(self):
+        if self.cap.janela:
+            t = motor.tamanho_janela(self.cap.janela)
+            if t and t[0] > 0 and t[1] > 0:
+                return t
         _, w, h = self.monitor_atual()
+        return w, h
+
+    # ---- o seletor "Capturar"
+    def _opcoes_captura(self):
+        """{rotulo: ("tela", monitor) | ("janela", hwnd, exe, titulo)}"""
+        ops = {}
+        for i, w, h in self.monitores:
+            ops[f"Tela inteira  ·  Monitor {i + 1}  ·  {w}x{h}"] = ("tela", i)
+        for j in motor.listar_janelas():
+            titulo = j["titulo"] if len(j["titulo"]) <= 48 else j["titulo"][:47] + "…"
+            ops[f"Janela  ·  {titulo}  ·  {j['exe']}"] = ("janela", j["hwnd"], j["exe"], j["titulo"])
+        return ops
+
+    def _rotulo_atual(self):
+        if self.cap.janela:
+            for k, v in self.capturas.items():
+                if v[0] == "janela" and v[1] == self.cap.janela:
+                    return k
+        for k, v in self.capturas.items():
+            if v == ("tela", self.c["monitor"]):
+                return k
+        return next(iter(self.capturas), "")
+
+    def _atualizar_capturas(self):
+        self.capturas = self._opcoes_captura()
+        self.menu_captura.configure(values=list(self.capturas))
+        self.menu_captura.set(self._rotulo_atual())
+        self.l_dica_captura.configure(
+            text="só essa janela, mesmo com outra por cima" if self.cap.janela else "")
+
+    def _restaurar_captura(self):
+        """Na abertura, acha de novo a janela escolhida da ultima vez (o hwnd muda a cada
+        vez que o programa abre; procura pelo programa e pelo titulo)."""
+        cap = self.c.get("captura") or {"tipo": "tela"}
+        self.cap.janela = None
+        if cap.get("tipo") == "janela":
+            js = motor.listar_janelas()
+            achada = (next((j for j in js if j["exe"] == cap.get("exe") and j["titulo"] == cap.get("titulo")), None)
+                      or next((j for j in js if j["exe"] == cap.get("exe")), None))
+            if achada:
+                self.cap.janela = achada["hwnd"]
+            else:
+                self.r.after(700, lambda: self._estado(
+                    f"A janela de {cap.get('exe')} não está aberta: gravando a tela inteira", ALERTA, ALERTA))
+        self._atualizar_capturas()
+
+    def _captura_escolhida(self, rotulo_escolhido):
+        v = self.capturas.get(rotulo_escolhido)
+        if not v or self.cap.gravando:
+            return
+        if v[0] == "tela":
+            self.cap.janela = None
+            self.c["captura"] = {"tipo": "tela"}
+            self.c["monitor"] = self.cap.monitor = v[1]
+        else:
+            self.cap.janela = v[1]
+            self.c["captura"] = {"tipo": "janela", "exe": v[2], "titulo": v[3]}
+        salvar_config(self.c)
+        self._atualizar_capturas()
+        self.mostrar_resumo()
+        if self.v_previa.get():
+            self.cap.desligar_previa()
+            self.cap.ligar_previa()
+
+    def _conferir_janela(self):
+        """Janela gravada fechou (com o Argos parado): volta pra tela inteira e avisa."""
+        if self.cap.janela and not ctypes.windll.user32.IsWindow(self.cap.janela) and not self.cap.gravando:
+            self.cap.janela = None
+            self.c["captura"] = {"tipo": "tela"}
+            salvar_config(self.c)
+            self._estado("A janela escolhida fechou: voltou pra tela inteira", ALERTA, ALERTA)
+            self._atualizar_capturas()
+            self.mostrar_resumo()
+            if self.v_previa.get():
+                self.cap.desligar_previa()
+                self.cap.ligar_previa()
+
+    def mostrar_resumo(self):
+        w, h = self.tamanho_captura()
         alt = self.c.get("altura")
         tam = f"{round(w * alt / h) // 2 * 2}x{alt}" if alt and alt < h else f"{w}x{h}"
         fam = self.c.get("familia") or "cpu"
@@ -740,6 +839,11 @@ class App:
         self.mostrar_resumo()
         if monitor_mudou:
             self.cap.monitor = self.c["monitor"]
+            self.cap.janela = None
+            self.c["captura"] = {"tipo": "tela"}
+            salvar_config(self.c)
+            self._atualizar_capturas()
+            self.mostrar_resumo()
             if self.v_previa.get():
                 self.cap.desligar_previa()
                 self.cap.ligar_previa()
@@ -868,6 +972,7 @@ class App:
             self.barra.pack_forget()
             self.c_audio.grid_remove()
             self.c_ctrl.grid_remove()
+            self.l_captura.grid_remove()
             self.corpo.pack_configure(padx=0, pady=0)
             self.moldura.configure(corner_radius=0)
             self.tela.pack_configure(padx=0, pady=0)
@@ -885,6 +990,7 @@ class App:
             self.barra.pack(side="bottom", fill="x", padx=20, pady=(0, 8), before=self.corpo)
             self.c_audio.grid()
             self.c_ctrl.grid()
+            self.l_captura.grid()
             if self.v_previa.get():
                 self.tela.itemconfig(self.aviso_tela, text="")
 
@@ -912,6 +1018,7 @@ class App:
         for w in self.travaveis:
             w.configure(state="disabled" if travado else "normal")
         self.f_mic.menu.configure(state="disabled" if travado else "normal")  # faixas trocam ao vivo
+        self.menu_captura.configure(state="disabled" if travado else "normal")
 
     def gravar(self):
         self.ocupado = True
@@ -919,7 +1026,7 @@ class App:
         self.b_gravar.configure(state="disabled", text="Começando…")
         self._estado("Começando…")
         c = self.c
-        _, _, h = self.monitor_atual()
+        _, h = self.tamanho_captura()
         alt = c.get("altura") if c.get("altura") and c["altura"] < h else None
         args = (self.audio, c["pasta"], c["fps"], c["qualidade"], c["familia"] or "cpu",
                 c["codec"], alt, c["formato"])
@@ -1029,6 +1136,9 @@ class App:
         if time.time() - self._ultima_lista > 4 and self._na_frente():
             self._ultima_lista = time.time()
             self._atualizar_listas()
+            if not self.cap.gravando and not self.ocupado:
+                self._conferir_janela()
+                self._atualizar_capturas()
         self.r.after(50, self.tique)
 
     def fechar(self):

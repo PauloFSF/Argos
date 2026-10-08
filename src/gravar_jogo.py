@@ -155,6 +155,51 @@ def detectar_codificadores():
             if any(ok[(f, c)] for c in CODECS)}
 
 
+def listar_janelas():
+    """Janelas que da pra gravar: visiveis, com titulo, que aparecem na barra de tarefas.
+    [{"hwnd", "titulo", "exe"}]. Fora: a do proprio Argos, janela de ferramenta e as
+    "escondidas" do Windows 11 (cloaked: apps da loja suspensos ficam visiveis e vazios)."""
+    import psutil
+    u32, dwm = ctypes.windll.user32, ctypes.windll.dwmapi
+    eu = os.getpid()
+    achadas = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    def cada(h, _):
+        if not u32.IsWindowVisible(h) or u32.GetWindow(h, 4):  # 4 = GW_OWNER
+            return True
+        n = u32.GetWindowTextLengthW(h)
+        if not n or u32.GetWindowLongW(h, -20) & 0x80:  # WS_EX_TOOLWINDOW
+            return True
+        escondida = ctypes.c_int(0)
+        dwm.DwmGetWindowAttribute(h, 14, ctypes.byref(escondida), 4)  # DWMWA_CLOAKED
+        if escondida.value:
+            return True
+        pid = wt.DWORD()
+        u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        if pid.value == eu:
+            return True
+        b = ctypes.create_unicode_buffer(n + 1)
+        u32.GetWindowTextW(h, b, n + 1)
+        try:
+            exe = psutil.Process(pid.value).name()
+        except psutil.Error:
+            exe = ""
+        achadas.append({"hwnd": int(h), "titulo": b.value, "exe": exe})
+        return True
+
+    u32.EnumWindows(cada, 0)
+    return achadas
+
+
+def tamanho_janela(hwnd):
+    """(largura, altura) da area de dentro da janela, ja par (o codificador exige)."""
+    r = wt.RECT()
+    if not ctypes.windll.user32.GetClientRect(wt.HWND(hwnd), ctypes.byref(r)):
+        return None
+    return (r.right - r.left) // 2 * 2, (r.bottom - r.top) // 2 * 2
+
+
 def listar_monitores():
     """[(indice, largura, altura)] NA ORDEM do ddagrab, perguntando pro proprio ffmpeg:
     a ordem do Windows (EnumDisplayMonitors) pode nao bater com a do ddagrab."""
@@ -479,6 +524,7 @@ class Captura:
 
     def __init__(self, monitor=0, ao_quadro=None):
         self.monitor = monitor
+        self.janela = None  # hwnd: se tiver, grava SO essa janela em vez do monitor
         self.ao_quadro = ao_quadro
         self.previa = False
         self.inicio = None
@@ -552,6 +598,20 @@ class Captura:
         partes += [f"[s{i}]pan=stereo|c0=c{2 * i}|c1=c{2 * i + 1}[a{i}]" for i in range(n)]
         return ";".join(partes)
 
+    def _fonte(self, fps):
+        """De onde vem a imagem, ja na placa de video.
+        Monitor: ddagrab (Desktop Duplication). Janela: gfxcapture, a captura de janela do
+        Windows (Windows.Graphics.Capture, a mesma do OBS): pega SO aquela janela, mesmo com
+        outra por cima. Ela so manda quadro quando a janela muda, por isso o fps= depois
+        (repete o quadro e o video sai com taxa constante, o que o editor precisa). Medido
+        em 08/10/2026 numa janela do Chrome com video: 600 quadros em 10 s, 0 buracos,
+        4,7 s de CPU (o monitor inteiro com a mesma conversao de cor: ~3,7 a 4,5 s).
+        width/height=-2 arredondam pra numero par, que o codificador exige."""
+        if self.janela:
+            return (f"gfxcapture=hwnd={self.janela}:max_framerate={fps}:width=-2:height=-2,"
+                    f"fps={fps}")
+        return f"ddagrab=output_idx={self.monitor}:framerate={fps}"
+
     def ligar_previa(self):
         self.previa = True
         if self._gravando or self.vivo():
@@ -559,7 +619,7 @@ class Captura:
         self._ff = self._abrir([
             FFMPEG, "-hide_banner", "-loglevel", "error", "-init_hw_device", "d3d11va",
             "-filter_complex",
-            f"ddagrab=output_idx={self.monitor}:framerate={PREV_FPS},hwdownload,format=bgra,"
+            f"{self._fonte(PREV_FPS)},hwdownload,format=bgra,"
             f"scale={PREV_W}:{PREV_H}:flags=fast_bilinear",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
 
@@ -605,7 +665,7 @@ class Captura:
             "-f", "s16le", "-ar", str(audio.taxa), "-ac", str(audio.canais_saida),
             "-thread_queue_size", "4096", "-i", f"tcp://127.0.0.1:{porta}?listen=1",
             "-filter_complex",
-            f"ddagrab=output_idx={self.monitor}:framerate={fps},split[g1][g2];"
+            f"{self._fonte(fps)},split[g1][g2];"
             # COR, o que veio do OBS: converter NA MAO pro padrao de video (bt709,
             # faixa limitada) e marcar o arquivo. Medido em 08/10/2026: deixando o AMF
             # converter sozinho, o arquivo saia marcado 'gbr' e o preto da barra de

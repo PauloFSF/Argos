@@ -29,6 +29,7 @@ Os vídeos vão para `Vídeos\Argos`. Dá para trocar a pasta em **Configurar gr
 ## O que ele faz
 
 - **Leve:** quem comprime o vídeo é a placa de vídeo (AMD, NVIDIA ou Intel), não o processador. Medido num Ryzen 7 5700G gravando 1366x768 a 60 fps: **~5% do processador e ~180 MB de memória**.
+- **Grava a tela inteira ou só uma janela:** escolha em **Capturar**, embaixo da prévia. Gravando uma janela, sai só ela, mesmo com outra por cima (a mesma captura de janela que o OBS usa).
 - **Testa a sua placa sozinho** na primeira vez que abre, e só mostra as opções que funcionam no seu PC.
 - **Som por programa:** a **Faixa 1** e a **Faixa 2** gravam o programa que você escolher (o jogo, o Discord, o navegador) ou o som do PC todo. Você pode renomear as duas.
 - **4 trilhas de som no arquivo:** tudo misturado, mais cada faixa e o microfone separados. No DaVinci ou no Premiere, cada uma vira uma trilha que você ajusta sozinha.
