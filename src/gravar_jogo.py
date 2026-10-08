@@ -192,10 +192,29 @@ def listar_janelas():
     return achadas
 
 
+def janela_minimizada(hwnd):
+    return bool(hwnd) and bool(ctypes.windll.user32.IsIconic(wt.HWND(hwnd)))
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_uint), ("flags", ctypes.c_uint), ("show", ctypes.c_uint),
+                ("pmin", wt.POINT), ("pmax", wt.POINT), ("normal", wt.RECT)]
+
+
 def tamanho_janela(hwnd):
-    """(largura, altura) da area de dentro da janela, ja par (o codificador exige)."""
+    """(largura, altura) da area de dentro da janela, ja par (o codificador exige).
+    Minimizada, o Windows devolve lixo (152x24, medido em 08/10/2026): usa o tamanho
+    que ela tem quando restaurada."""
+    u32 = ctypes.windll.user32
+    if janela_minimizada(hwnd):
+        wp = _WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(wp)
+        if u32.GetWindowPlacement(wt.HWND(hwnd), ctypes.byref(wp)):
+            n = wp.normal
+            return (n.right - n.left) // 2 * 2, (n.bottom - n.top) // 2 * 2
+        return None
     r = wt.RECT()
-    if not ctypes.windll.user32.GetClientRect(wt.HWND(hwnd), ctypes.byref(r)):
+    if not u32.GetClientRect(wt.HWND(hwnd), ctypes.byref(r)):
         return None
     return (r.right - r.left) // 2 * 2, (r.bottom - r.top) // 2 * 2
 
@@ -626,12 +645,26 @@ class Captura:
     def desligar_previa(self):
         self.previa = False
         if not self._gravando:
-            self._fechar_ff(espera=3)
+            self._matar_ff()
+
+    def _matar_ff(self):
+        """Previa nao tem arquivo pra fechar direito: mata na hora. Medido em 08/10/2026:
+        o "q" educado esperava 3,01 s com janela minimizada (o ffmpeg fica parado
+        esperando um quadro que nunca vem e nem le o "q"), e a janela travava junto."""
+        ff, self._ff = self._ff, None
+        if ff:
+            try:
+                ff.kill()
+                ff.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
     def gravar(self, audio, pasta, fps=60, nivel="Alta", familia="amd", codec="h264",
                altura=None, formato="mp4"):
         """altura=None grava no tamanho do monitor; senao reduz (ex: 1080, 720)."""
-        self._fechar_ff(espera=3)  # sai do modo previa
+        if janela_minimizada(self.janela):
+            raise RuntimeError("a janela escolhida está minimizada: restaure ela pra gravar")
+        self._matar_ff()  # sai do modo previa (previa nao tem arquivo, pode matar)
         os.makedirs(pasta, exist_ok=True)
         base = os.path.join(pasta, "jogo_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         self.formato = formato if formato in FORMATOS else "mp4"

@@ -783,6 +783,16 @@ class App:
                     f"A janela de {cap.get('exe')} não está aberta: gravando a tela inteira", ALERTA, ALERTA))
         self._atualizar_capturas()
 
+    def _reiniciar_previa(self):
+        """Troca a fonte da previa sem deixar a imagem velha parada na tela."""
+        self.quadro = None
+        self.foto.paste(Image.new("RGB", self.tam_foto, "#000000"))
+        if self.v_previa.get():
+            self._esperando_quadro = True
+            self.tela.itemconfig(self.aviso_tela, text="Carregando…")
+            self.cap.desligar_previa()
+            self.cap.ligar_previa()
+
     def _captura_escolhida(self, rotulo_escolhido):
         v = self.capturas.get(rotulo_escolhido)
         if not v or self.cap.gravando:
@@ -797,9 +807,7 @@ class App:
         salvar_config(self.c)
         self._atualizar_capturas()
         self.mostrar_resumo()
-        if self.v_previa.get():
-            self.cap.desligar_previa()
-            self.cap.ligar_previa()
+        self._reiniciar_previa()
 
     def _conferir_janela(self):
         """Janela gravada fechou (com o Argos parado): volta pra tela inteira e avisa."""
@@ -810,9 +818,7 @@ class App:
             self._estado("A janela escolhida fechou: voltou pra tela inteira", ALERTA, ALERTA)
             self._atualizar_capturas()
             self.mostrar_resumo()
-            if self.v_previa.get():
-                self.cap.desligar_previa()
-                self.cap.ligar_previa()
+            self._reiniciar_previa()
 
     def mostrar_resumo(self):
         w, h = self.tamanho_captura()
@@ -844,9 +850,7 @@ class App:
             salvar_config(self.c)
             self._atualizar_capturas()
             self.mostrar_resumo()
-            if self.v_previa.get():
-                self.cap.desligar_previa()
-                self.cap.ligar_previa()
+            self._reiniciar_previa()
 
     def _pasta_curta(self):
         p = self.c["pasta"]
@@ -1117,7 +1121,22 @@ class App:
             except queue.Empty:
                 break
         q, self.quadro = self.quadro, None
-        if q and self.v_previa.get() and self._na_frente():
+        if self.cap.janela and self.v_previa.get() and not self.cheia:
+            minimizada = motor.janela_minimizada(self.cap.janela)
+            if minimizada != getattr(self, "_aviso_minimizada", False):
+                self._aviso_minimizada = minimizada
+                self.tela.itemconfig(self.aviso_tela, text=(
+                    "A janela está minimizada  ·  restaure ela pra aparecer e gravar" if minimizada else ""))
+                if minimizada:
+                    self.foto.paste(Image.new("RGB", self.tam_foto, "#000000"))
+                    self._esperando_quadro = False
+        elif getattr(self, "_aviso_minimizada", False):
+            self._aviso_minimizada = False
+            self.tela.itemconfig(self.aviso_tela, text="")
+        if q and getattr(self, "_esperando_quadro", False):
+            self._esperando_quadro = False
+            self.tela.itemconfig(self.aviso_tela, text="")
+        if q and self.v_previa.get() and self._na_frente() and not getattr(self, "_aviso_minimizada", False):
             dado, w, h = q
             img = Image.frombuffer("RGB", (w, h), dado, "raw", "RGB", 0, 1)
             if img.size != self.tam_foto:
