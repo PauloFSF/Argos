@@ -1130,6 +1130,11 @@ class App:
                 if minimizada:
                     self.foto.paste(Image.new("RGB", self.tam_foto, "#000000"))
                     self._esperando_quadro = False
+                else:
+                    # saiu de minimizada: a captura comecou com a janela minimizada e ficou
+                    # presa no tamanho da miniatura (a barra de titulo, ~150x24). Visto em
+                    # 08/10/2026: a previa mostrava so o titulo da aba, borrado. Recomeca.
+                    self._reiniciar_previa()
         elif getattr(self, "_aviso_minimizada", False):
             self._aviso_minimizada = False
             self.tela.itemconfig(self.aviso_tela, text="")

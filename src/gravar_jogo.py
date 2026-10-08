@@ -627,8 +627,10 @@ class Captura:
         4,7 s de CPU (o monitor inteiro com a mesma conversao de cor: ~3,7 a 4,5 s).
         width/height=-2 arredondam pra numero par, que o codificador exige."""
         if self.janela:
-            return (f"gfxcapture=hwnd={self.janela}:max_framerate={fps}:width=-2:height=-2,"
-                    f"fps={fps}")
+            # resize_mode=scale_aspect: se a janela mudar de tamanho no meio, a imagem e'
+            # reduzida pra caber (o padrao 'crop' cortava a janela ou enchia de preto)
+            return (f"gfxcapture=hwnd={self.janela}:max_framerate={fps}:width=-2:height=-2:"
+                    f"resize_mode=scale_aspect,fps={fps}")
         return f"ddagrab=output_idx={self.monitor}:framerate={fps}"
 
     def ligar_previa(self):
