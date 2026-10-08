@@ -1,0 +1,9 @@
+# o pacote vai pela pagina de Releases, nao pelo git
+dist/
+build/
+*.spec
+
+__pycache__/
+*.pyc
+libs/
+ffmpeg/
